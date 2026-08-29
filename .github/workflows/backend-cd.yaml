@@ -83,4 +83,63 @@ jobs:
 
       - name: Build backend Docker image
         working-directory: starter/backend
-        run: docker build .
+        run: docker build -t backend:ci .
+
+      - name: Save backend Docker image
+        run: docker save backend:ci --output starter/backend/backend-image.tar
+
+      - name: Upload backend Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image
+          path: starter/backend/backend-image.tar
+          if-no-files-found: error
+
+  deploy:
+    name: Backend Deploy
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download backend Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-image
+          path: image
+
+      - name: Load backend Docker image
+        run: docker load --input image/backend-image.tar
+
+      - name: Install kind
+        run: |
+          curl -fsSLo kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x kind
+          sudo install kind /usr/local/bin/kind
+          kind version
+
+      - name: Install kubectl
+        run: |
+          kubectl_version="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${kubectl_version}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Create Kind cluster
+        run: kind create cluster --name backend-ci --wait 60s
+
+      - name: Load backend image into Kind
+        run: kind load docker-image backend:ci --name backend-ci
+
+      - name: Deploy backend manifests
+        run: |
+          kubectl apply -f starter/backend/k8s/service.yaml
+          sed 's|image: backend|image: backend:ci|' starter/backend/k8s/deployment.yaml | kubectl apply -f -
+
+      - name: Wait for backend deployment
+        run: kubectl rollout status deployment/backend --timeout=120s
+
+      - name: Confirm backend pods
+        run: kubectl get pods

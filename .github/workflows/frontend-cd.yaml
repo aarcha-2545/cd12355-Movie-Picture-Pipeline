@@ -80,4 +80,63 @@ jobs:
         run: |
           docker build \
             --build-arg REACT_APP_MOVIE_API_URL=http://localhost:5000 \
-            .
+            -t frontend:ci .
+
+      - name: Save frontend Docker image
+        run: docker save frontend:ci --output starter/frontend/frontend-image.tar
+
+      - name: Upload frontend Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-image
+          path: starter/frontend/frontend-image.tar
+          if-no-files-found: error
+
+  deploy:
+    name: Frontend Deploy
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download frontend Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-image
+          path: image
+
+      - name: Load frontend Docker image
+        run: docker load --input image/frontend-image.tar
+
+      - name: Install kind
+        run: |
+          curl -fsSLo kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x kind
+          sudo install kind /usr/local/bin/kind
+          kind version
+
+      - name: Install kubectl
+        run: |
+          kubectl_version="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${kubectl_version}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Create Kind cluster
+        run: kind create cluster --name frontend-ci --wait 60s
+
+      - name: Load frontend image into Kind
+        run: kind load docker-image frontend:ci --name frontend-ci
+
+      - name: Deploy frontend manifests
+        run: |
+          kubectl apply -f starter/frontend/k8s/service.yaml
+          sed 's|image: frontend|image: frontend:ci|' starter/frontend/k8s/deployment.yaml | kubectl apply -f -
+
+      - name: Wait for frontend deployment
+        run: kubectl rollout status deployment/frontend --timeout=120s
+
+      - name: Confirm frontend pods
+        run: kubectl get pods
