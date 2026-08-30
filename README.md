@@ -470,7 +470,6 @@ kustomize build | kubectl apply -f -
 
 [License](LICENSE.md)
 ## Project Evidence
-## Project Evidence
 
 ### GitHub Repository
 https://github.com/aarcha-2545/cd12355-Movie-Picture-Pipeline
