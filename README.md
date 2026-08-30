@@ -470,17 +470,19 @@ kustomize build | kubectl apply -f -
 
 [License](LICENSE.md)
 ## Project Evidence
+## Project Evidence
 
 ### GitHub Repository
-https://github.com/varunsiripuram02/cd12354-Movie-Picture-Pipeline
+https://github.com/aarcha-2545/cd12355-Movie-Picture-Pipeline
 
 ### Deployed Applications
 
 Frontend:
-http://a7f6ab208c56d4b6b9abed31ceca4da0-14598355.us-east-1.elb.amazonaws.com
-
+http://afc0950e7ceef42f3a2ebfb9c01b53d6-751141237.us-east-1.elb.amazonaws.com
 Backend API:
-http://a35f3c9c5d8a8429c901e843040765f6-949209305.us-east-1.elb.amazonaws.com/movies
+http://a3b5598ac550b4419a6b5b28ba70dbd0-261068833.us-east-1.elb.amazonaws.com/movies
+
+> If infrastructure is torn down before review, replace the two URLs above with a note pointing to the teardown evidence in the Evidence section below (kubectl get svc/pods/deploy/nodes, kubectl describe deploy, kubectl describe svc, and ECR image details), per the rubric.
 
 ### GitHub Actions Workflows
 
@@ -498,9 +500,11 @@ All four workflows have successful runs.
 The `Screenshots` folder contains evidence for:
 
 - Backend CI successful run
-- Backend CD successful run
+- Backend CD successful run (showing deploy to the EKS cluster, not `kind`)
 - Frontend CI successful run
-- Frontend CD successful run
-- Working backend `/movies` API
-- Working frontend Movie List
-- `kubectl get all` showing healthy deployments, services, and running pods
+- Frontend CD successful run (showing deploy to the EKS cluster, not `kind`)
+- Working frontend Movie List (live URL, with timestamp visible)
+- `kubectl get svc,pods,deploy,nodes -o wide` (showing AWS resource identifiers / ARNs)
+- `kubectl describe deploy`
+- `kubectl describe svc`
+- ECR image details for both frontend and backend repositories (showing your AWS Account ID in the image URI)
