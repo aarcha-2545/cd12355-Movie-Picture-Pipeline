@@ -1,5 +1,4 @@
 name: Backend Continuous Deployment
-# trigger
 
 on:
   push:
@@ -10,137 +9,126 @@ on:
       - '.github/workflows/backend-cd.yaml'
   workflow_dispatch:
 
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: cluster
+  ECR_REPOSITORY: backend
+
 jobs:
 
   lint:
     name: Backend Lint
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: starter/backend
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: pipenv
           cache-dependency-path: starter/backend/Pipfile.lock
-
       - name: Install Pipenv
         run: pip install pipenv
-
       - name: Install dependencies
         run: pipenv install --dev --deploy
-
       - name: Run lint
         run: pipenv run lint
-
 
   test:
     name: Backend Test
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: starter/backend
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: pipenv
           cache-dependency-path: starter/backend/Pipfile.lock
-
       - name: Install Pipenv
         run: pip install pipenv
-
       - name: Install dependencies
         run: pipenv install --dev --deploy
-
       - name: Run tests
         run: pipenv run test
 
-
-  build:
-    name: Backend Build
+  build-and-push:
+    name: Backend Build & Push to ECR
     runs-on: ubuntu-latest
-
-    needs:
-      - lint
-      - test
-
+    needs: [lint, test]
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build backend Docker image
-        working-directory: starter/backend
-        run: docker build -t backend:ci .
-
-      - name: Save backend Docker image
-        run: docker save backend:ci --output starter/backend/backend-image.tar
-
-      - name: Upload backend Docker image
-        uses: actions/upload-artifact@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          name: backend-image
-          path: starter/backend/backend-image.tar
-          if-no-files-found: error
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag (git SHA), and push backend image
+        id: build-image
+        working-directory: starter/backend
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build --tag "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
   deploy:
-    name: Backend Deploy
+    name: Backend Deploy to EKS
     runs-on: ubuntu-latest
-    needs: build
-
+    needs: build-and-push
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download backend Docker image
-        uses: actions/download-artifact@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          name: backend-image
-          path: image
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Load backend Docker image
-        run: docker load --input image/backend-image.tar
-
-      - name: Install kind
-        run: |
-          curl -fsSLo kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
-          chmod +x kind
-          sudo install kind /usr/local/bin/kind
-          kind version
+      - name: Update kubeconfig for EKS cluster
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
 
       - name: Install kubectl
         run: |
           kubectl_version="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
           curl -fsSLo kubectl "https://dl.k8s.io/release/${kubectl_version}/bin/linux/amd64/kubectl"
           sudo install -m 0755 kubectl /usr/local/bin/kubectl
-          kubectl version --client
 
-      - name: Create Kind cluster
-        run: kind create cluster --name backend-ci --wait 60s
-
-      - name: Load backend image into Kind
-        run: kind load docker-image backend:ci --name backend-ci
-
-      - name: Deploy backend manifests
+      - name: Install kustomize
         run: |
-          kubectl apply -f starter/backend/k8s/service.yaml
-          sed 's|image: backend|image: backend:ci|' starter/backend/k8s/deployment.yaml | kubectl apply -f -
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
 
-      - name: Wait for backend deployment
-        run: kubectl rollout status deployment/backend --timeout=120s
+      - name: Set image and apply backend manifests to EKS
+        working-directory: starter/backend/k8s
+        run: |
+          kustomize edit set image backend=${{ needs.build-and-push.outputs.image }}
+          kustomize build | kubectl apply -f -
 
-      - name: Confirm backend pods
-        run: kubectl get pods
+      - name: Wait for backend rollout
+        run: kubectl rollout status deployment/backend --timeout=180s
+
+      - name: Show backend deployment status
+        run: kubectl get svc,pods,deploy -o wide
